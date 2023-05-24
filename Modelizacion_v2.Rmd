@@ -1,0 +1,245 @@
+---
+title: "Modelización LiDAR"
+author: "Jessica Bernal"
+date: "23/4/2022"
+output: html_document
+---
+
+## Contenido:
+
+1. [Cargar librerías](#id1)
+2. [Preparar base de datos](#id2)
+3. [Regresión paramétrica](#id3)
+4. [Regresión no paramétrica](#id4)
+5. [Análisis de errores de los modelos](#id5)
+
+<div id='id1' />
+
+### 1. Cargar librerías
+
+Para empezar, cargamos las librerías con las que vamos a trabajar (las instalamos previamente en caso de no tenerlas)
+```{r}
+#install.packages("Metrics")
+```
+
+
+```{r}
+rm(list=ls())
+pck <- (c("tidyr", "dplyr", "readxl", "ggplot2", "randomForest", "car", "Metrics"))
+sapply(pck, require, character.only=TRUE)
+```
+
+<div id='id2' />
+
+### 2. Preparar base de datos
+
+A continuación, procedemos a intersectar el archivo de métricas LiDAR que hemos generado con los datos del inventario de campo. Para ello, usaremos campos comunes como el *fid* y el *ID*. 
+
+```{r}
+inventario <- read_excel ("C:/Geoforest/Lidar_II/Parcelas/resultado parcelas_.xls", sheet=1)
+metricas <- read_excel ("C:/Geoforest/Lidar_II/Datos_Lidar/metricas.xlsx")
+
+ds <- merge(inventario, metricas, by=c("fid", "ID"))
+```
+
+<div id='id3' />
+
+### 3. Regresión paramétrica
+
+En este apartado necesitamos entender la relación entre una variable respuesta (dasométrica o dendométrica) medida en campo a través del inventario, y un conjunto de variables predictivas obtenidas de las métricas de los datos LiDAR. Un métido estadístico ampliamente utilizado es la regresión lineal simple o multivariable, no obstante, este modelo requiere que nuestros datos cumplan cinco asunciones: 
+
+#### 3.1 Relacion lineal entre las variables
+Es decir, que exista una relación lineal entre cada predictor y la variable respuesta. La forma mas fácil de evaluar es visualizar la relación entre cada predictor (variable X) y la variable respuesta (variable Y). En este sentido, debemos de evaluar si los puntos entre la variable X e Y siguen una linea recta. En el siguiente ejemplo usaremos la variable dependiente altura (H) y algunas de las variables más sensibles a la altura como son el percentil 90 y el percentil 50.
+
+```{r}
+colnames(ds)
+
+```
+
+
+```{r}
+library(ggplot2)
+# Ejemplo
+ds %>% dplyr::select(p90, p50, hmedia_m) %>%
+  pivot_longer(cols = -hmedia_m) %>%
+  ggplot(aes(x = hmedia_m, y = value, color = name)) + geom_point()+
+  stat_smooth(aes(), method="lm", formula=y ~ x) +theme_bw()+
+  ylab("percentiles (m)")+ xlab("Altura (H, m)")
+```
+
+
+
+Como vemos la relación es razonablemente buena. Podemos comprobar también con en el test de correlación de Pearson, incluso con percentiles bajos de hasta 50 (r=0.80, p-value < 3.1e-07):
+
+```{r}
+cor.test(ds$p50, ds$hmedia_m, method=c("pearson"))  
+```
+
+
+En el caso que esta relación no fuera lineal, tendríamos varias opciones: 
+
+1. Aplicar una transformación (ej. Logit, BoxTransform) para linearizar el problema. 
+2. Anadir otra variable al modelo. Es decir, si la relación entre la variable X e Y sigue una función potencial podríamos ajustar mediante *Y = aX^2 + b*. 
+3. Eliminar dicha variable como variable predictora ya que en el caso extremo una relación no lineal puede no ser de gran utilidad en el modelo.
+
+#### 3.2 Multicolinearidad
+
+En el caso de regresiones multivariables, este método requiere que no exista una correlación entre los predictores, ya que una multicolinearidad causaría incertidumbres en los coeficientes del modelo. Un método generalmente empleado para detectar multicolinearidad es el **factor de inflación de la varianza (FIV)**, el cual mide el grado de la correlación entre los predictores del modelo. Una regla establecida es que si el FIV entre 2 predictores se aproxima a un valor de 1 indicaría no correlacion, valores entre 1 y 5 una correlación moderada, y mayores de 5 una correlación severa.
+
+En el ejercicio siguiente procederemos a evaluar la multicolinearidad entre un conjunto de variables predictoras del área basimétrica (*G_m2_ha*). Para ello, usaremos predictores como percentiles y bicentiles, cobertura y densidad de huecos (ej *p90, b50, cov_gap, dns_gap*)
+
+```{r}
+#Ajustamos el modelo de regresion
+model <- lm(G_m2_ha ~ p90 + b50 + cov_gap + dns_gap, data = ds) 
+
+# Visualizamos los resultados del modelo
+
+summary(model)
+```
+
+
+
+Los resultados del modelo muestran un *R-squared*: 0.8943. Adicionalmente, podemos observar un *F-statistic*: 56.01 y su correspondiente *p-value*: 3.217e-11, lo que indica que el modelo se ajustó de forma significativa. Además, los predictores *p90* y *cov_gap* son estadísticamente significativos a un nivel de significancia de 0.01, mientras *b50* y *dns_gap* no mostraron ningun beneficio para el modelo. Una vez hecha la evaluación de la robustez del modelo, pasamos a calcular su FIV.
+
+```{r}
+#Calcular FIV para cada predictor del modelo
+vif(model)
+```
+
+Aunque la mayoría de valores muestran una colinearidad moderada, esta es especialmente preocupante para el caso de *b50*, la cual supera valores de 5. Por lo tanto, es razonable intentar ajustar el modelo con sus 2 variables más significantes *p90*, y *cov_gap*. En cierto sentido, este proceso nos llevaría a una reducción de variables. No olvidemos que otra forma de visualizar las correlaciones entre los predictores es a través de una matriz de correlación.
+
+A continuación, probamos si el modelo se ve afectado después de eliminar las variables *b50* y *dns_gap*.
+
+```{r}
+#Ajustamos el modelo de regresion
+model <- lm(G_m2_ha ~ p90 + cov_gap, data = ds) 
+
+# Visualicemos los resultados del modelo
+
+summary(model)
+```
+
+
+Es importante resaltar que existen otros métodos estadísticos que son menos restrictivos al efecto de la multicolinearidad como regresiones parciales de mínimos cuadrados.
+
+#### 3.3 Independencia
+Otro importante aspecto en la regresión es conocer si las observaciones son independientes. Este elemento es particularmente relevante en series temporales y podría ser evaluado mediante el test de Durbin-Watson.
+
+#### 3.4 Homocedasticidad
+Para evaluar si la varianza de los residuales es constante a lo largo del modelo procedemos a realizar una análisis de residuales. La forma mas simple es visualizar la dispersión de los residuales a lo largo de las predicciones del modelo.
+
+```{r}
+
+plot(model, which=1, col=c("blue")) 
+```
+
+
+
+
+El gráfico de arriba sugiere que la varianza de los residuales es homogénea para todo el rango de valores de las predicciones. En caso contrario, deberiamos optar por redefinir las variables o incluso reevaluar sus distribuciones para que cumplan con la normalidad.
+
+#### 3.5 Normalidad multivariable
+Por último, debemos asegurarnos que los residuales del modelo siguen una distribución normal mediante una Q-Q plot. Además, podemos proceder con algunos de los test de normalidad como los de *Shapiro-Wilk*, *Kolmogorov-Smironov*, *Jarque-Barre*, o *D'Agostino-Pearson*.
+
+```{r}
+
+plot(model, which=2, col=c("blue")) 
+```
+
+
+<div id='id4' />
+
+### 4. Regresión no paramétrica
+
+Los métodos de regresión no paramétrica son particularmente útiles para casos en los que tratemos estructuras de datos mas complejas como un conjunto de correlaciones no lineales entre variables. Aunque el éxito del ajuste de dichos modelos depende en gran medida de la dimensión del set de datos, dichos modelos solventan satisfactoriamente los requerimientos de los modelos paramétricos.
+
+Aunque un set de datos de 27 observaciones podría ser bastante limitado para un modelo robusto vamos a proceder a ajustar uno de los métodos estadísticos mas ampliamente usados como es el *Random Forest*.
+
+
+
+```{r}
+model1 <- randomForest(G_m2_ha ~ p90 + cov_gap, data = ds, importance = TRUE)
+model1
+```
+
+
+<div id='id5' />
+#### 5. Análisis de errores de los modelos
+
+Por último pasaremos a estudiar la fiabilidad de los modelos. Aunque hemos podido comprobar su coeficiente de determinación, procedamos a visualizar las predicciones de ambos modelos frente a los datos medido en campo. Debemos tener en cuenta que el ajuste del modelo se ha realizado en la totalidad del tamano muestral y no hemos considerado un dataset independiente para la validación. Esto podría realizarse alternativamente mediante métodos de *bootstrapping*.
+
+
+
+```{r}
+
+PredictModLineal <- predict(model, data=ds)
+PredictModRF <- predict(model1, data=ds)
+Observed <- ds$G_m2_ha
+
+tmp <- data.frame(PredictModLineal, PredictModRF, Observed)
+
+tmp %>% dplyr::select(PredictModLineal, PredictModRF, Observed) %>%
+  pivot_longer(cols = -Observed) %>%
+  ggplot(aes(x = Observed, y = value, color = name)) + geom_point()+
+  stat_smooth(aes(), method="lm", formula=y ~ x) +theme_bw()+
+  ylab("Modelo")+ xlab("Observaciones")
+```
+
+
+
+
+Pasemos ahora a calcular el error medio cuadrático de ambos modelos. Hay que recordar que la inventariación con datos LiDAR no incluye error muestral sino error de estimación de la muestra.
+
+```{r}
+RMSE_lineal <- rmse(tmp$Observed, tmp$PredictModLineal)
+RMSE_lineal
+```
+
+
+
+```{r}
+RMSE_RF <- rmse(tmp$Observed, tmp$PredictModRF)
+RMSE_RF
+```
+
+Pregunta: Que tipo de modelo es mas fiable para proyectarlo a toda la superficie.
+
+### 6. Procede a realizar otro modelo para cada una de las variables inventariadas
+
+```{r}
+library(caret)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(readxl)
+library(car)
+library(Metrics)
+library(stats)
+
+```
+```{r}
+colnames(ds)
+```
+
+```{r}
+model2 <- knn3(G_m2_ha ~ p90 + cov_gap, data = ds, importance = TRUE)
+model2
+```
+```{r}
+summary(model2)
+```
+
+
+```{r}
+PredictModKnn <- predict(model2, data=ds)
+
+tmp2 <- data.frame(PredictModLineal, PredictModRF, PredictModKnn, Observed)
+
+tmp2 %>% dplyr::select(PredictModLineal, PredictModRF, PredictModKnn, Observed) %>%
+  pivot_longer(cols = -Observed) %>%
+  ggplot(aes(x = Observed, y = value, color = name)) + geom_point()+
+  stat_smooth(aes(), method="lm", formula=y ~ x) +theme_bw()+
+  ylab("Modelo")+ xlab("Observaciones")
+```
+
+
