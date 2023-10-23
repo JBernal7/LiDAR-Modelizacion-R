@@ -34,7 +34,7 @@ Puedes instalar cualquier paquete que no tengas con el comando `install.packages
 
 ## Contribución
 
-Este repositorio está destinado a ser un registro de un proyecto personal. Sin embargo, si encuentras algún error o tienes alguna sugerencia de mejora, no dudes en abrir un issue.
+Este repositorio está destinado a ser un registro de las actividades realizas en el marco del Máster Oficial [Geoforest](https://mastergeoforest.es/). Sin embargo, si encuentras algún error o tienes alguna sugerencia de mejora, no dudes en abrir un issue.
 
 
 Shield: [![CC BY 4.0][cc-by-shield]][cc-by]
